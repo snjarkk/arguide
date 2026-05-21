@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ARナビ Pro (高精度・修正版)</title>
+    <style>
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background-color: #000; font-family: -apple-system, sans-serif; }
+        #camera-view { position: fixed; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; }
+        
+        #ui-layer { position: fixed; bottom: 0; left: 0; width: 100%; z-index: 10; color: white; padding: 15px; pointer-events: none; box-sizing: border-box; }
+        .input-form { background: rgba(0, 0, 0, 0.85); padding: 15px; border-radius: 20px; pointer-events: auto; border: 1px solid rgba(255, 255, 255, 0.3); margin-bottom: env(safe-area-inset-bottom); transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s; }
+        .input-form.collapsed { transform: translateY(calc(100% - 50px)); opacity: 0.9; }
+        
+        .form-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid rgba(255,255,255,0.2); }
+        .toggle-btn { background: #007AFF; border: none; color: white; padding: 6px 16px; border-radius: 20px; font-size: 14px; font-weight: bold; }
+        
+        .input-group { margin-bottom: 10px; }
+        label { display: block; font-size: 11px; margin-bottom: 3px; color: #aaa; }
+        select, input { width: 100%; padding: 12px; border-radius: 8px; border: none; background: #222; color: #fff; font-size: 16px; box-sizing: border-box; }
+        
+        .point-selector { display: flex; gap: 5px; margin-bottom: 15px; overflow-x: auto; padding-bottom: 5px; }
+        .point-tab { flex: 1; min-width: 50px; padding: 8px; text-align: center; background: #333; border-radius: 8px; font-size: 12px; border: 2px solid transparent; }
+        .point-tab.active { border-color: #007AFF; background: #444; }
+        
+        #save-btn { width: 100%; padding: 16px; background: #34c759; color: white; border: none; border-radius: 10px; font-weight: bold; font-size: 18px; margin-top: 5px; box-shadow: 0 4px 12px rgba(52,199,89,0.4); }
+        #start-btn { width: 100%; padding: 16px; background: #007AFF; color: white; border: none; border-radius: 10px; font-weight: bold; font-size: 18px; margin-top: 10px; }
+        
+        /* ガイド矢印 */
+        .guide-arrow { position: fixed; top: 50%; width: 70px; height: 70px; z-index: 15; transform: translateY(-50%); display: none; filter: drop-shadow(0 0 15px rgba(0,122,255,1.0)); pointer-events: none; stroke: #007AFF; fill: none; }
+        #guide-left { left: 15px; }
+        #guide-right { right: 15px; transform: translateY(-50%) rotate(180deg); }
+        
+        #ar-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 5; pointer-events: none; }
+        .target-dot { position: absolute; width: 30px; height: 30px; border: 2px solid white; border-radius: 50%; transform: translate(-50%, -50%); display: none; box-shadow: 0 0 15px rgba(0,0,0,0.5); }
+        .target-label { position: absolute; top: -20px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.7); color: white; padding: 1px 6px; border-radius: 8px; font-size: 10px; white-space: nowrap; font-weight: bold; }
+        
+        #north-indicator { position: absolute; top: 35%; left: 50%; transform: translate(-50%, -50%); color: #ff3b30; font-weight: bold; font-size: 28px; text-shadow: 0 0 10px #000, 0 0 5px #fff; display: none; pointer-events: none; z-index: 6; text-align: center; }
+        #north-indicator::before { content: ""; display: block; width: 0; height: 0; border-left: 12px solid transparent; border-right: 12px solid transparent; border-bottom: 18px solid #ff3b30; margin: 0 auto 5px auto; filter: drop-shadow(0 0 5px rgba(0,0,0,0.5)); }
+
+        #distance-info { position: fixed; top: 100px; left: 0; width: 100%; text-align: center; color: white; z-index: 10; pointer-events: none; }
+        .dist-text { font-size: 32px; font-weight: bold; text-shadow: 0 2px 15px #000; }
+        .alt-text { font-size: 18px; text-shadow: 0 1px 8px #000; background: rgba(0,0,0,0.6); display: inline-block; padding: 4px 12px; border-radius: 12px; margin-top: 5px; font-weight: bold; }
+        
+        #current-loc-display { position: fixed; top: 10px; left: 0; width: 100%; text-align: center; color: #00ff00; font-size: 10px; z-index: 20; pointer-events: none; text-shadow: 0 1px 3px #000; font-family: monospace; background: rgba(0,0,0,0.6); padding: 8px 0; line-height: 1.5; }
+        
+        #status-msg { background: rgba(0, 122, 255, 0.95); padding: 12px; border-radius: 10px; font-size: 14px; margin-top: 10px; display: none; pointer-events: auto; text-align: center; }
+    </style>
+</head>
+<body>
+
+<div id="current-loc-display">
+    <div id="curr-latlng">緯度経度: 取得中...</div>
+    <div id="curr-jpr">平面直角: 取得中...</div>
+</div>
+<video id="camera-view" autoplay playsinline muted></video>
+
+<svg id="guide-left" class="guide-arrow" viewBox="0 0 24 24" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+<svg id="guide-right" class="guide-arrow" viewBox="0 0 24 24" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+
+<div id="ar-overlay">
+    <div id="north-indicator">N</div>
+</div>
+
+<div id="distance-info">
+    <div class="dist-text" id="dist-val">--.--m</div>
+    <div class="alt-text" id="alt-val">高低差: --.--m</div>
+</div>
+
+<div id="ui-layer">
+    <div id="input-ui" class="input-form">
+        <div class="form-header">
+            <span style="font-weight: bold; font-size: 16px;">📍 測量ナビ Pro (JGD2011対応版)</span>
+            <button class="toggle-btn" id="toggle-ui">閉じる</button>
+        </div>
+        <div id="form-content">
+            <div class="point-selector" id="point-tabs"></div>
+            
+            <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+                <div class="input-group" style="flex:1;"><label>X座標 (北正) [m]</label><input type="number" id="target-x" placeholder="0.000" step="0.001"></div>
+                <div class="input-group" style="flex:1;"><label>Y座標 (東正) [m]</label><input type="number" id="target-y" placeholder="0.000" step="0.001"></div>
+            </div>
+            
+            <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+                <div class="input-group" style="flex:1;"><label>標高 Z (m)</label><input type="number" id="target-z" value="0" step="0.001"></div>
+                <div class="input-group" style="flex:1;">
+                    <label>平面直角座標系</label>
+                    <select id="coord-system">
+                        <script>
+                            for(let i=1; i<=19; i++) {
+                                const selected = (i === 15) ? 'selected' : '';
+                                document.write(`<option value="${i}" ${selected}>${i}系</option>`);
+                            }
+                        </script>
+                    </select>
+                </div>
+            </div>
+
+            <div class="input-group"><label>名称(備考)</label><input type="text" id="target-name" placeholder="地点名称を入力"></div>
+            
+            <button id="save-btn">このポイントを保存</button>
+            <button id="start-btn">ナビゲーション開始</button>
+        </div>
+        <div id="status-msg"></div>
+    </div>
+</div>
+
+<script>
+    const video = document.getElementById('camera-view');
+    const startBtn = document.getElementById('start-btn');
+    const saveBtn = document.getElementById('save-btn');
+    const toggleBtn = document.getElementById('toggle-ui');
+    const inputUi = document.getElementById('input-ui');
+    const formContent = document.getElementById('form-content');
+    const arOverlay = document.getElementById('ar-overlay');
+    const pointTabs = document.getElementById('point-tabs');
+    const guideLeft = document.getElementById('guide-left');
+    const guideRight = document.getElementById('guide-right');
+    const distVal = document.getElementById('dist-val');
+    const altVal = document.getElementById('alt-val');
+    const statusMsg = document.getElementById('status-msg');
+    const currLatLngDisp = document.getElementById('curr-latlng');
+    const currJPRDisp = document.getElementById('curr-jpr');
+
+    const COLORS = ['#ff3b30', '#ff9500', '#ffcc00', '#34c759', '#007aff'];
+    const ORIGINS = [
+        [33, 129.5], [33, 131], [36, 132.166666666], [33, 133.5], [36, 134.333333333], [36, 136], [36, 137.166666666], [36, 138.5],
+        [36, 139.833333333], [40, 140.833333333], [44, 140.25], [44, 142.25], [44, 144.25], [26, 142], [26, 127.5], [26, 124],
+        [26, 131], [20, 136], [26, 154]
+    ];
+
+    const savedData = JSON.parse(localStorage.getItem('ar_nav_points')) || [];
+    let state = { 
+        currentPos: null, 
+        currentJPR: null,
+        targets: Array(5).fill(null).map((_, i) => {
+            const saved = savedData[i] || {};
+            return { id: i, x: saved.x || null, y: saved.y || null, z: saved.z || 0, sys: saved.sys || 15, name: saved.name || `点${i+1}`, color: COLORS[i] };
+        }),
+        activeIdx: 0,
+        heading: 0, pitch: 0, active: false 
+    };
+
+    state.targets.forEach((t, i) => {
+        const tab = document.createElement('div');
+        tab.className = `point-tab ${i === 0 ? 'active' : ''}`;
+        tab.id = `tab-btn-${i}`;
+        tab.innerText = t.name;
+        tab.style.color = t.color;
+        tab.onclick = () => selectPoint(i);
+        pointTabs.appendChild(tab);
+
+        const dot = document.createElement('div');
+        dot.id = `dot-${i}`;
+        dot.className = 'target-dot';
+        dot.style.background = `radial-gradient(circle, white 0%, ${t.color} 100%)`;
+        dot.innerHTML = `<div class="target-label" id="label-${i}">${t.name}</div>`;
+        arOverlay.appendChild(dot);
+    });
+
+    selectPoint(0);
+
+    function selectPoint(idx) {
+        state.activeIdx = idx;
+        document.querySelectorAll('.point-tab').forEach((t, i) => t.classList.toggle('active', i === idx));
+        const t = state.targets[idx];
+        document.getElementById('target-x').value = t.x !== null ? t.x : '';
+        document.getElementById('target-y').value = t.y !== null ? t.y : '';
+        document.getElementById('target-z').value = t.z || 0;
+        document.getElementById('coord-system').value = t.sys || 15;
+        document.getElementById('target-name').value = t.name || `点${idx+1}`;
+        update();
+    }
+
+    function showToast(msg, isError = false) {
+        statusMsg.innerText = msg;
+        statusMsg.style.background = isError ? "rgba(255, 45, 85, 0.95)" : "rgba(0, 122, 255, 0.95)";
+        statusMsg.style.display = 'block';
+        setTimeout(() => { statusMsg.style.display = 'none'; }, 3000);
+    }
+
+    toggleBtn.addEventListener('click', () => {
+        const isCollapsed = inputUi.classList.toggle('collapsed');
+        toggleBtn.innerText = isCollapsed ? '入力' : '閉じる';
+        formContent.style.display = isCollapsed ? 'none' : 'block';
+    });
+
+    function getGKConstants(phi0_deg, lam0_deg) {
+        const phi0 = phi0_deg * Math.PI / 180, lam0 = lam0_deg * Math.PI / 180;
+        const a = 6378137.0, f = 1 / 298.257222101, m0 = 0.9999;
+        const n = f / (2 - f);
+        const ap = (a / (1 + n)) * (1 + Math.pow(n, 2) / 4 + Math.pow(n, 4) / 64);
+        const alpha = [null, 
+            (3/2)*n - Math.pow(n,2) + (7/8)*Math.pow(n,3) - (11/64)*Math.pow(n,4),
+            (15/16)*Math.pow(n,2) - (15/16)*Math.pow(n,3) + (71/128)*Math.pow(n,4),
+            (35/48)*Math.pow(n,3) - (35/48)*Math.pow(n,4),
+            (315/512)*Math.pow(n,4)
+        ];
+        return { a, f, m0, n, ap, alpha, phi0, lam0 };
+    }
+
+    function latLngToJpr(lat, lng, system) {
+        const org = ORIGINS[system - 1];
+        const c = getGKConstants(org[0], org[1]);
+        const phi = lat * Math.PI / 180, lam = lng * Math.PI / 180;
+        const t = Math.sinh(Math.atanh(Math.sin(phi)) - (2 * Math.sqrt(c.n) / (1 + c.n)) * Math.atanh((2 * Math.sqrt(c.n) / (1 + c.n)) * Math.sin(phi)));
+        const xi_p = Math.atan2(t, Math.cos(lam - c.lam0)), et_p = Math.atanh(Math.sin(lam - c.lam0) / Math.sqrt(1 + t * t));
+        let xi = xi_p, et = et_p;
+        for (let j = 1; j <= 4; j++) {
+            xi += c.alpha[j] * Math.sin(2 * j * xi_p) * Math.cosh(2 * j * et_p);
+            et += c.alpha[j] * Math.cos(2 * j * xi_p) * Math.sinh(2 * j * et_p);
+        }
+        const t0 = Math.sinh(Math.atanh(Math.sin(c.phi0)) - (2 * Math.sqrt(c.n) / (1 + c.n)) * Math.atanh((2 * Math.sqrt(c.n) / (1 + c.n)) * Math.sin(c.phi0)));
+        const xi_p0 = Math.atan2(t0, 1);
+        let xi0 = xi_p0;
+        for (let j = 1; j <= 4; j++) xi0 += c.alpha[j] * Math.sin(2 * j * xi_p0);
+        return { x: c.m0 * c.ap * (xi - xi0), y: c.m0 * c.ap * et };
+    }
+
+    saveBtn.addEventListener('click', () => {
+        const x = parseFloat(document.getElementById('target-x').value);
+        const y = parseFloat(document.getElementById('target-y').value);
+        const z = parseFloat(document.getElementById('target-z').value) || 0;
+        const sys = parseInt(document.getElementById('coord-system').value);
+        const name = document.getElementById('target-name').value || `点${state.activeIdx+1}`;
+        if (isNaN(x) || isNaN(y)) { showToast("座標を入力してください", true); return; }
+        const target = state.targets[state.activeIdx];
+        target.x = x; target.y = y; target.z = z; target.sys = sys; target.name = name;
+        document.getElementById(`tab-btn-${state.activeIdx}`).innerText = name;
+        document.getElementById(`label-${state.activeIdx}`).innerText = name;
+        localStorage.setItem('ar_nav_points', JSON.stringify(state.targets));
+        showToast(`「${name}」を保存しました`);
+        update();
+    });
+
+    startBtn.addEventListener('click', async () => {
+        try {
+            if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+                const res = await DeviceOrientationEvent.requestPermission();
+                if (res !== 'granted') throw new Error("方位センサーの許可が必要です。");
+            }
+            if (!state.active) {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+                video.srcObject = stream; video.play();
+                navigator.geolocation.watchPosition(p => {
+                    const lat = p.coords.latitude, lng = p.coords.longitude;
+                    state.currentPos = { lat, lng, alt: p.coords.altitude || 0 };
+                    const sys = parseInt(document.getElementById('coord-system').value);
+                    state.currentJPR = latLngToJpr(lat, lng, sys);
+                    currLatLngDisp.innerText = `現在地(十進法): ${lat.toFixed(7)}, ${lng.toFixed(7)}`;
+                    currJPRDisp.innerText = `平面直角(${sys}系): X=${state.currentJPR.x.toFixed(3)}, Y=${state.currentJPR.y.toFixed(3)}`;
+                    update();
+                }, e => showToast("GPSエラー: " + e.message, true), { enableHighAccuracy: true });
+                window.addEventListener('deviceorientation', e => {
+                    state.heading = e.webkitCompassHeading || (360 - e.alpha);
+                    state.pitch = e.beta; update();
+                }, true);
+                state.active = true; startBtn.innerText = "座標を再更新して案内";
+                setTimeout(() => { if(!inputUi.classList.contains('collapsed')) toggleBtn.click(); }, 1000);
+            } else {
+                saveBtn.click();
+            }
+        } catch (err) { showToast(err.message, true); }
+    });
+
+    function update() {
+        if (!state.active || !state.currentPos || !state.currentJPR) return;
+        
+        // 北方指示器の更新
+        const northIndicator = document.getElementById('north-indicator');
+        let diffNorth = 0 - state.heading;
+        if (diffNorth > 180) diffNorth -= 360; if (diffNorth < -180) diffNorth += 360;
+        if (Math.abs(diffNorth) < 30) {
+            const nxPos = (50 + (diffNorth / 60) * 100);
+            northIndicator.style.left = `${nxPos}%`;
+            northIndicator.style.display = 'block';
+        } else {
+            northIndicator.style.display = 'none';
+        }
+
+        let activeDist = Infinity; let activeAlt = 0; let activeName = "";
+        
+        state.targets.forEach((t, i) => {
+            const dot = document.getElementById(`dot-${i}`);
+            if (t.x === null || t.y === null) { dot.style.display = 'none'; return; }
+            const currJPR = latLngToJpr(state.currentPos.lat, state.currentPos.lng, t.sys);
+            const dx = t.x - currJPR.x, dy = t.y - currJPR.y;
+            const distH = Math.sqrt(dx * dx + dy * dy);
+            const distTotal = Math.sqrt(distH * distH + Math.pow(t.z - state.currentPos.alt, 2));
+            
+            if (i === state.activeIdx) {
+                activeDist = distTotal;
+                activeAlt = t.z - state.currentPos.alt;
+                activeName = t.name;
+            }
+
+            const brng = (Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360;
+            let diffH = brng - state.heading; 
+            if (diffH > 180) diffH -= 360; if (diffH < -180) diffH += 360;
+            
+            const fov = 30; 
+            if (i === state.activeIdx) {
+                if (diffH < -fov) { guideLeft.style.display = 'block'; guideRight.style.display = 'none'; }
+                else if (diffH > fov) { guideLeft.style.display = 'none'; guideRight.style.display = 'block'; }
+                else { guideLeft.style.display = 'none'; guideRight.style.display = 'none'; }
+            }
+
+            if (Math.abs(diffH) < fov) {
+                const xPos = (50 + (diffH / (fov * 2)) * 100);
+                dot.style.left = `${xPos}%`; dot.style.top = `50%`; dot.style.display = 'block';
+                const size = Math.max(15, Math.min(60, 500 / (Math.sqrt(distTotal) + 1)));
+                dot.style.width = dot.style.height = `${size}px`;
+                dot.style.zIndex = Math.floor(1000 - distTotal);
+            } else { dot.style.display = 'none'; }
+        });
+
+        distVal.innerText = activeDist === Infinity ? "--.--m" : `${activeName}: 約${activeDist.toFixed(2)}m`;
+        altVal.innerText = activeDist === Infinity ? "高低差: --.--m" : `高低差: ${activeAlt > 0 ? '+' : ''}${activeAlt.toFixed(2)}m`;
+    }
+</script>
+</body>
+</html>
